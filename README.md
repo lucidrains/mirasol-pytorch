@@ -4,6 +4,8 @@
 
 Implementation of <a href="https://arxiv.org/abs/2311.05698">Mirasol</a>, Multimodal Autoregressive model out of Google Deepmind, in Pytorch
 
+Will simply implement the Transformer Combiner and omit the other variants.
+
 ## Citations
 
 ```bibtex
