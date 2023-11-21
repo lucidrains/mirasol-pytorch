@@ -16,9 +16,8 @@ setup(
     'adaptive computation'
   ],
   install_requires=[
-    'audiolm-pytorch>=1.8.1',
     'einops>=0.7.0',
-    'magvit2-pytorch>=0.1.26',
+    'x-transformers>=1.24.7',
     'torch>=2.0'
   ],
   classifiers=[
