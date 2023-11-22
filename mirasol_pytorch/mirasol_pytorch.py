@@ -65,6 +65,7 @@ class Mirasol(Module):
         attn_dim_head = 64,
         attn_heads = 8,
         attn_layers_kwargs: dict = dict(),
+        combiner_kwargs: dict = dict(),
         autoregressive_wrapper_kwargs: dict = dict(
             pad_value = 0,
             ignore_index = -100
@@ -83,12 +84,19 @@ class Mirasol(Module):
 
         # combiner, which they found another transformer (followed by splicing the output) is sufficient
 
-        self.combiner = Encoder(
+        default_combiner_kwargs = dict(
             dim = dim,
             depth = combiner_depth,
             dim_head = attn_dim_head,
             heads = attn_heads,
-            *attn_layers_kwargs
+        )
+
+        self.combiner = Encoder(
+            **{
+                **default_combiner_kwargs,
+                **attn_layers_kwargs,
+                **combiner_kwargs
+            }
         )
 
         self.combiner_output_num_tokens = combiner_output_num_tokens
