@@ -184,6 +184,11 @@ class Mirasol(Module):
 
         av_encoder_input = rearrange(combined_audio_video_tokens, 'b ... d -> b (...) d')
 
+        # chunked causal attn mask
+
+        causal_mask = torch.ones((num_time_steps, num_time_steps), device = self.device, dtype = torch.bool).triu(1)
+        causal_mask = repeat(causal_mask, 'i j -> (i c1) (j c2)', c1 = self.combiner_output_num_tokens, c2 = self.combiner_output_num_tokens)
+
         # custom rotary positions for the autoregressive a/v encoder
         # for example, post combined tokens of 3 would be [0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3, ...]
 
@@ -194,7 +199,11 @@ class Mirasol(Module):
 
         # encode the audio / video tokens autoregressively
 
-        av_embeddings = self.encoder(av_encoder_input, rotary_pos_emb = rotary_emb)
+        av_embeddings = self.encoder(
+            av_encoder_input,
+            attn_mask = ~causal_mask,
+            rotary_pos_emb = rotary_emb
+        )
 
         if not return_loss:
             return self.decoder(text, context = av_embeddings)
