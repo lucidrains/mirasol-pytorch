@@ -53,6 +53,15 @@ loss = model(
 )
 
 loss.backward()
+
+# after much training
+
+sampled_text = model.generate(
+    prompt = text[:, 0],
+    audio = audio,
+    video = video,
+    seq_len = 2
+)
 ```
 
 ## Todo
@@ -62,6 +71,7 @@ loss.backward()
 - [ ] add audio and video reconstruction losses
 - [ ] text generation code
 - [ ] add similarity regularization from TTS research
+- [ ] auto-handle start token for decoder
 
 ## Citations
 

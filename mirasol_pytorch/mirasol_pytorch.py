@@ -183,6 +183,8 @@ class Mirasol(Module):
 
         # text decoder
 
+        self.text_max_seq_len = text_max_seq_len
+
         self.decoder = TransformerWrapper(
             num_tokens = num_text_tokens,
             max_seq_len = text_max_seq_len,
@@ -206,6 +208,30 @@ class Mirasol(Module):
     def device(self):
         return next(self.parameters()).device
 
+    @torch.no_grad()
+    def generate(
+        self,
+        *,
+        prompt: Tensor,
+        seq_len: int,
+        **kwargs
+    ):
+        was_training = self.training
+        self.eval()
+
+        assert 'generate' not in kwargs
+        assert 'generate_seq_len' not in kwargs
+
+        out = self.forward(
+            text = prompt,
+            generate = True,
+            generate_seq_len = seq_len,
+            **kwargs
+        )
+
+        self.train(was_training)
+        return out
+
     @beartype
     def forward(
         self,
@@ -216,7 +242,9 @@ class Mirasol(Module):
         encoded_video: Optional[Tensor] = None,
         text: Tensor,
         return_loss = True,
-        return_loss_breakdown = False
+        return_loss_breakdown = False,
+        generate = False,
+        generate_seq_len = None
     ):
         assert only_one_true(exists(audio), exists(encoded_audio))
         assert only_one_true(exists(video), exists(encoded_video))
@@ -312,6 +340,10 @@ class Mirasol(Module):
             attn_mask = ~causal_mask,
             rotary_pos_emb = rotary_emb
         )
+
+        if generate:
+            generate_seq_len = default(generate_seq_len, self.text_max_seq_len)
+            return self.wrapped_decoder.generate(text, seq_len = generate_seq_len, context = av_embeddings)
 
         if not return_loss:
             return self.decoder(text, context = av_embeddings)
