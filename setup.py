@@ -18,7 +18,7 @@ setup(
   install_requires=[
     'beartype',
     'einops>=0.7.0',
-    'x-transformers>=1.24.7',
+    'x-transformers>=1.25.2',
     'torch>=2.0'
   ],
   classifiers=[

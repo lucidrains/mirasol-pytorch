@@ -5,6 +5,8 @@ from torch.nn import Module, ModuleList
 
 from x_transformers import Encoder, Decoder
 
+from beartype import beartype
+
 from einops import rearrange, repeat
 
 # helper functions
