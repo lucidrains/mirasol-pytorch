@@ -5,7 +5,9 @@ from torch.nn import Module, ModuleList
 
 from beartype import beartype
 from beartype.typing import Optional, Union, Tuple
+
 from einops import rearrange, repeat, pack, unpack
+from einops.layers.torch import Rearrange
 
 from x_transformers import (
     Encoder,
@@ -36,6 +38,13 @@ def pack_one(t, pattern):
 def unpack_one(t, ps, pattern):
     return unpack(t, ps, pattern)[0]
 
+def l2norm(t):
+    return F.normalize(t, dim = -1)
+
+def cosine_sim_loss(x, y):
+    x, y = map(l2norm, (x, y))
+    return 1. - einsum('b n d, b n d -> b n', x, y).mean()
+
 # main class
 
 class Mirasol(Module):
@@ -59,7 +68,8 @@ class Mirasol(Module):
         autoregressive_wrapper_kwargs: dict = dict(
             pad_value = 0,
             ignore_index = -100
-        )
+        ),
+        av_autoregressive_loss_weight = 1.
     ):
         super().__init__()
 
@@ -97,6 +107,15 @@ class Mirasol(Module):
             **attn_layers_kwargs
         )
 
+        # for audio/video autoregressive loss
+
+        self.to_encoder_next_token_pred = nn.Sequential(
+            Rearrange('b (n c) d -> b n (c d)', c = combiner_output_num_tokens),
+            nn.Linear(combiner_output_num_tokens * dim, dim)
+        )
+
+        self.av_autoregressive_loss_weight = av_autoregressive_loss_weight
+
         # text decoder
 
         self.decoder = TransformerWrapper(
@@ -131,7 +150,8 @@ class Mirasol(Module):
         encoded_audio: Optional[Tensor] = None,
         encoded_video: Optional[Tensor] = None,
         text: Tensor,
-        return_loss = True
+        return_loss = True,
+        return_loss_breakdown = False
     ):
         assert only_one_true(exists(audio), exists(encoded_audio))
         assert only_one_true(exists(video), exists(encoded_video))
@@ -171,4 +191,26 @@ class Mirasol(Module):
         if not return_loss:
             return self.decoder(text, context = av_embeddings)
 
-        return self.wrapped_decoder(text, context = av_embeddings)
+        # av autoregressive cosine sim loss
+
+        next_token_predictions = self.to_encoder_next_token_pred(av_embeddings)
+
+        past, future = next_token_predictions[:, :-1], next_token_predictions[:, 1:]
+
+        av_autoregressive_loss = cosine_sim_loss(past, future)
+
+        # text autoregressive loss
+
+        text_autoregressive_loss = self.wrapped_decoder(text, context = av_embeddings)
+
+        # total loss
+
+        total_loss = text_autoregressive_loss + \
+                     av_autoregressive_loss * self.av_autoregressive_loss_weight
+
+        if not return_loss_breakdown:
+            return total_loss
+
+        loss_breakdown = (text_autoregressive_loss, av_autoregressive_loss)
+
+        return total_loss, loss_breakdown
