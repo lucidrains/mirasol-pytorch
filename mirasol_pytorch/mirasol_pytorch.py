@@ -4,7 +4,7 @@ from torch import Tensor, nn, einsum
 from torch.nn import Module, ModuleList
 
 from beartype import beartype
-from beartype.typing import Optional, Union, Tuple
+from beartype.typing import Optional, Union, Tuple, Dict, Any
 
 from einops import rearrange, repeat, pack, unpack
 from einops.layers.torch import Rearrange
@@ -28,6 +28,9 @@ def default(*args):
         if exists(arg):
             return arg
     return None
+
+def divisible_by(num, den):
+    return (num % den) == 0
 
 def only_one_true(*bools):
     return sum(*[map(int, bools)]) == 1
@@ -55,16 +58,24 @@ class Mirasol(Module):
         *,
         dim,
         num_text_tokens,
-        audio_timechunk_tokens = 16,
-        video_timechunk_tokens = 16,
+        video_image_size,
+        video_frames_per_timechunk,
+        audio_freq_dim,
+        audio_time_dim_per_timechunk,
+        audio_patch_size: Tuple[int, int],  # (freq, time)
+        video_patch_size: Tuple[int, int],  # (spatial, time)
+        audio_encoder: Union[Module, Dict[str, Any]],
+        video_encoder: Union[Module, Dict[str, Any]],
         text_max_seq_len = 2048,
         encoder_depth = 6,
         decoder_depth = 6,
         combiner_depth = 2,
         combiner_output_num_tokens = 3,
+        video_channels = 3,
         attn_dim_head = 64,
         attn_heads = 8,
         attn_layers_kwargs: dict = dict(),
+        combiner: Optional[Module] = None,
         combiner_kwargs: dict = dict(),
         autoregressive_wrapper_kwargs: dict = dict(
             pad_value = 0,
@@ -73,6 +84,50 @@ class Mirasol(Module):
         av_autoregressive_loss_weight = 1.
     ):
         super().__init__()
+
+        audio_freq_patch_size, audio_time_patch_size = audio_patch_size
+        video_spatial_patch_size, video_time_patch_size = video_patch_size
+
+        assert divisible_by(audio_time_dim_per_timechunk, audio_time_patch_size)
+        assert divisible_by(video_frames_per_timechunk, video_time_patch_size)
+
+        assert divisible_by(audio_freq_dim, audio_freq_patch_size)
+        assert divisible_by(video_image_size, video_spatial_patch_size)
+
+        audio_timechunk_tokens = (audio_freq_dim // audio_freq_patch_size) * (audio_time_dim_per_timechunk // audio_time_patch_size)
+        video_timechunk_tokens = ((video_image_size // video_spatial_patch_size) ** 2) * (video_frames_per_timechunk // video_time_patch_size)
+
+        self.audio_freq_dim = audio_freq_dim
+
+        self.video_channels = video_channels
+        self.video_image_size = video_image_size
+
+        self.video_frames_per_timechunk = video_frames_per_timechunk
+        self.audio_time_dim_per_timechunk = audio_time_dim_per_timechunk
+
+        video_patch_dim = video_channels * (video_spatial_patch_size ** 2) * video_time_patch_size
+        audio_patch_dim = audio_freq_patch_size * audio_time_patch_size
+
+        self.to_video_tokens = nn.Sequential(
+            Rearrange('b c (f pf) (h ph) (w pw) -> b f h w (c pf ph pw)', pf = video_time_patch_size, ph = video_spatial_patch_size, pw = video_spatial_patch_size),
+            nn.Linear(video_patch_dim, dim),
+            nn.LayerNorm(dim)
+        )
+
+        self.to_audio_tokens = nn.Sequential(
+            Rearrange('b (f pf) (t pt) -> b f t (pf pt)', pf = audio_freq_patch_size, pt = audio_time_patch_size),
+            nn.Linear(audio_patch_dim, dim),
+            nn.LayerNorm(dim)
+        )
+
+        if isinstance(video_encoder, dict):
+            video_encoder = Encoder(**{'dim': dim, **video_encoder})
+
+        if isinstance(audio_encoder, dict):
+            audio_encoder = Encoder(**{'dim': dim, **audio_encoder})
+
+        self.video_encoder = video_encoder
+        self.audio_encoder = audio_encoder
 
         # number of tokens per chunk for a/v
 
@@ -84,21 +139,23 @@ class Mirasol(Module):
 
         # combiner, which they found another transformer (followed by splicing the output) is sufficient
 
-        default_combiner_kwargs = dict(
-            dim = dim,
-            depth = combiner_depth,
-            dim_head = attn_dim_head,
-            heads = attn_heads,
-        )
+        if not exists(combiner):
+            default_combiner_kwargs = dict(
+                dim = dim,
+                depth = combiner_depth,
+                dim_head = attn_dim_head,
+                heads = attn_heads,
+            )
 
-        self.combiner = Encoder(
-            **{
-                **default_combiner_kwargs,
-                **attn_layers_kwargs,
-                **combiner_kwargs
-            }
-        )
+            combiner = Encoder(
+                **{
+                    **default_combiner_kwargs,
+                    **attn_layers_kwargs,
+                    **combiner_kwargs
+                }
+            )
 
+        self.combiner = combiner
         self.combiner_output_num_tokens = combiner_output_num_tokens
 
         # a/v rotary embedding
@@ -163,6 +220,57 @@ class Mirasol(Module):
     ):
         assert only_one_true(exists(audio), exists(encoded_audio))
         assert only_one_true(exists(video), exists(encoded_video))
+
+        # handle encoding of video
+
+        if not exists(encoded_video):
+            _, c, t, h, w = video.shape
+
+            assert c == self.video_channels
+            assert (h == self.video_image_size) and (w == self.video_image_size)
+            assert divisible_by(t, self.video_frames_per_timechunk)
+
+            video = rearrange(video, 'b c (f fc) h w -> b f c fc h w', fc = self.video_frames_per_timechunk)
+            video, video_frame_ps = pack_one(video, '* c fc h w')
+
+            video_tokens = self.to_video_tokens(video)
+
+            video_tokens = rearrange(video_tokens, 'b ... d -> b (...) d')
+
+            encoded_video = self.video_encoder(video_tokens)
+
+            encoded_video = unpack_one(encoded_video, video_frame_ps, '* n d')
+
+        # handle encoding of audio
+
+        if not exists(encoded_audio):
+            _, f, t = audio.shape
+
+            assert f == self.audio_freq_dim
+            assert divisible_by(t, self.audio_time_dim_per_timechunk)
+
+            audio = rearrange(audio, 'b f (t tc) -> b tc f t', tc = self.audio_time_dim_per_timechunk)
+            audio, audio_time_ps = pack_one(audio, '* f t')
+
+            audio_tokens = self.to_audio_tokens(audio)
+
+            audio_tokens = rearrange(audio_tokens, 'b ... d -> b (...) d')
+
+            encoded_audio = self.audio_encoder(audio_tokens)
+
+            encoded_audio = unpack_one(encoded_audio, audio_time_ps, '* n d')
+
+        # ensure audio and video is time aligned
+
+        audio_time_frames = encoded_audio.shape[1]
+        video_time_frames = encoded_video.shape[1]
+
+        frames = min(audio_time_frames, video_time_frames)
+
+        encoded_audio = encoded_audio[:, :frames]
+        encoded_video = encoded_video[:, :frames]
+
+        # validate encoded audio / video
 
         assert encoded_audio.shape[:2] == encoded_video.shape[:2]
 
