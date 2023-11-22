@@ -28,7 +28,7 @@ def default(*args):
     return None
 
 def only_one_true(*bools):
-    return sum(*[map(int, bools)])
+    return sum(*[map(int, bools)]) == 1
 
 def pack_one(t, pattern):
     return pack([t], pattern)
