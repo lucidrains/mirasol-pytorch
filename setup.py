@@ -13,9 +13,10 @@ setup(
   keywords = [
     'artificial intelligence',
     'deep learning',
-    'adaptive computation'
+    'multimodality'
   ],
   install_requires=[
+    'beartype',
     'einops>=0.7.0',
     'x-transformers>=1.24.7',
     'torch>=2.0'
