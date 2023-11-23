@@ -1,3 +1,5 @@
+from functools import partial
+
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn, einsum
@@ -41,12 +43,44 @@ def pack_one(t, pattern):
 def unpack_one(t, ps, pattern):
     return unpack(t, ps, pattern)[0]
 
+# tensor helpers
+
 def l2norm(t):
     return F.normalize(t, dim = -1)
 
 def cosine_sim_loss(x, y):
     x, y = map(l2norm, (x, y))
     return 1. - einsum('b n d, b n d -> b n', x, y).mean()
+
+def posemb_sincos_nd(
+    t: Tensor,
+    temperature: int = 10000,
+    dtype = torch.float32
+):
+    b, *dims, feat_dim, device = *t.shape, t.device
+    seq_len = torch.tensor(dims).cumprod(dim = -1)[-1].item()
+
+    arange = partial(torch.arange, device = device)
+
+    num_dims = len(dims)
+    two_times_num_dims = 2 * num_dims # 2 because sin and cos of same position
+
+    rounded_feat_dim = feat_dim // num_dims * num_dims
+    feat_dim_remainder = feat_dim % num_dims
+
+    omega = arange(rounded_feat_dim // two_times_num_dims) / (rounded_feat_dim // two_times_num_dims - 1)
+    omega = 1.0 / (temperature ** omega)
+    meshed = torch.meshgrid(*[*map(arange, dims)], indexing = 'ij')
+
+    pos = torch.cat(tuple(m.flatten()[..., None] for m in meshed), dim = 0)
+    pos = pos * omega[None, :]
+
+    pos = torch.cat((pos.sin(), pos.cos()))
+
+    pos = rearrange(pos, '(n f) d -> n (f d)', n = seq_len)
+    pos = pos.type(dtype)
+
+    return F.pad(pos, (0, feat_dim_remainder))
 
 # main class
 
@@ -264,8 +298,11 @@ class Mirasol(Module):
             video, video_frame_ps = pack_one(video, '* c fc h w')
 
             video_tokens = self.to_video_tokens(video)
+            video_pos_emb = posemb_sincos_nd(video_tokens)
 
             video_tokens = rearrange(video_tokens, 'b ... d -> b (...) d')
+
+            video_tokens = video_tokens + video_pos_emb
 
             encoded_video = self.video_encoder(video_tokens)
 
@@ -283,8 +320,10 @@ class Mirasol(Module):
             audio, audio_time_ps = pack_one(audio, '* f t')
 
             audio_tokens = self.to_audio_tokens(audio)
+            audio_pos_emb = posemb_sincos_nd(audio_tokens)
 
             audio_tokens = rearrange(audio_tokens, 'b ... d -> b (...) d')
+            audio_tokens = audio_tokens + audio_pos_emb
 
             encoded_audio = self.audio_encoder(audio_tokens)
 
