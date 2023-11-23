@@ -96,10 +96,11 @@ class Mirasol(Module):
         video_frames_per_timechunk,
         audio_freq_dim,
         audio_time_dim_per_timechunk,
-        audio_patch_size: Tuple[int, int],  # (freq, time)
-        video_patch_size: Tuple[int, int],  # (spatial, time)
+        audio_patch_size: Tuple[int, int],    # (freq, time)
+        video_patch_size: Tuple[int, int],    # (spatial, time)
         audio_encoder: Union[Module, Dict[str, Any]],
         video_encoder: Union[Module, Dict[str, Any]],
+        num_audio_video_register_tokens = 8,  # https://arxiv.org/abs/2309.16588
         text_max_seq_len = 2048,
         encoder_depth = 6,
         decoder_depth = 6,
@@ -162,6 +163,9 @@ class Mirasol(Module):
 
         self.video_encoder = video_encoder
         self.audio_encoder = audio_encoder
+
+        self.video_register_tokens = nn.Parameter(torch.randn(num_audio_video_register_tokens, dim))
+        self.audio_register_tokens = nn.Parameter(torch.randn(num_audio_video_register_tokens, dim))
 
         # number of tokens per chunk for a/v
 
@@ -304,7 +308,12 @@ class Mirasol(Module):
 
             video_tokens = video_tokens + video_pos_emb
 
+            video_register_tokens = repeat(self.video_register_tokens, 'n d -> b n d', b = video_tokens.shape[0])
+            video_tokens, register_ps = pack([video_register_tokens, video_tokens], 'b * d')
+
             encoded_video = self.video_encoder(video_tokens)
+
+            _, encoded_video = unpack(video_tokens, register_ps, 'b * d')
 
             encoded_video = unpack_one(encoded_video, video_frame_ps, '* n d')
 
@@ -323,9 +332,15 @@ class Mirasol(Module):
             audio_pos_emb = posemb_sincos_nd(audio_tokens)
 
             audio_tokens = rearrange(audio_tokens, 'b ... d -> b (...) d')
+
             audio_tokens = audio_tokens + audio_pos_emb
 
+            audio_register_tokens = repeat(self.audio_register_tokens, 'n d -> b n d', b = audio_tokens.shape[0])
+            audio_tokens, register_ps = pack([audio_register_tokens, audio_tokens], 'b * d')
+
             encoded_audio = self.audio_encoder(audio_tokens)
+
+            _, encoded_audio = unpack(encoded_audio, register_ps, 'b * d')
 
             encoded_audio = unpack_one(encoded_audio, audio_time_ps, '* n d')
 
