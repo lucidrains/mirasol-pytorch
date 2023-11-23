@@ -84,3 +84,34 @@ sampled_text = model.generate(
     url     = {https://api.semanticscholar.org/CorpusID:265129010}
 }
 ```
+
+```bibtex
+@inproceedings{Liu2022TowardsBF,
+    title   = {Towards Better Few-Shot and Finetuning Performance with Forgetful Causal Language Models},
+    author  = {Hao Liu and Xinyang Geng and Lisa Lee and Igor Mordatch and Sergey Levine and Sharan Narang and P. Abbeel},
+    year    = {2022},
+    url     = {https://api.semanticscholar.org/CorpusID:256416540}
+}
+```
+
+```bibtex
+@article{Darcet2023VisionTN,
+    title   = {Vision Transformers Need Registers},
+    author  = {Timoth'ee Darcet and Maxime Oquab and Julien Mairal and Piotr Bojanowski},
+    journal = {ArXiv},
+    year    = {2023},
+    volume  = {abs/2309.16588},
+    url     = {https://api.semanticscholar.org/CorpusID:263134283}
+}
+```
+
+```bibtex
+@article{Bondarenko2023QuantizableTR,
+    title   = {Quantizable Transformers: Removing Outliers by Helping Attention Heads Do Nothing},
+    author  = {Yelysei Bondarenko and Markus Nagel and Tijmen Blankevoort},
+    journal = {ArXiv},
+    year    = {2023},
+    volume  = {abs/2306.12929},
+    url     = {https://api.semanticscholar.org/CorpusID:259224568}
+}
+```
