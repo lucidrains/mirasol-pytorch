@@ -1,6 +1,6 @@
 <img src="./mirasol.png" width="450px"></img>
 
-## Mirasol - Pytorch (wip)
+## 🌻 Mirasol - Pytorch (wip)
 
 Implementation of <a href="https://arxiv.org/abs/2311.05698">Mirasol</a>, SOTA Multimodal Autoregressive model out of Google Deepmind, in Pytorch
 
