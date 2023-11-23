@@ -82,6 +82,16 @@ def posemb_sincos_nd(
 
     return F.pad(pos, (0, feat_dim_remainder))
 
+def mask_with_prob(
+    shape: Tuple[int, ...],
+    prob: float,
+    device = None
+) -> Tensor:
+    length = shape[-1]
+    num_mask = int(prob * length)
+    randperm = torch.randn(shape).argsort(dim = -1)
+    return randperm >= num_mask
+
 # main class
 
 class Mirasol(Module):
@@ -96,12 +106,14 @@ class Mirasol(Module):
         video_frames_per_timechunk,
         audio_freq_dim,
         audio_time_dim_per_timechunk,
-        audio_patch_size: Tuple[int, int],    # (freq, time)
-        video_patch_size: Tuple[int, int],    # (spatial, time)
+        audio_patch_size: Tuple[int, int],              # (freq, time)
+        video_patch_size: Tuple[int, int],              # (spatial, time)
         audio_encoder: Union[Module, Dict[str, Any]],
         video_encoder: Union[Module, Dict[str, Any]],
-        num_audio_video_register_tokens = 8,  # https://arxiv.org/abs/2309.16588
+        num_audio_video_register_tokens = 8,            # https://arxiv.org/abs/2309.16588
+        audio_video_mask_prob = 0.15,                   # in the paper, they used masked tokens presumably, but from the Berkeley forgetful-causal-mask paper, a simple key-value mask should suffice
         text_max_seq_len = 2048,
+        text_forgetful_causal_mask_prob = 0.1,          # https://arxiv.org/abs/2210.13432
         encoder_depth = 6,
         decoder_depth = 6,
         combiner_depth = 2,
@@ -200,6 +212,11 @@ class Mirasol(Module):
 
         self.audio_video_rotary_pos_emb = RotaryEmbedding(attn_dim_head)
 
+        # masking of combined a/v tokens
+
+        self.audio_video_mask_prob = audio_video_mask_prob
+        self.get_audio_video_self_attn_mask = partial(mask_with_prob, prob = audio_video_mask_prob)
+
         # a/v encoder
 
         self.encoder = Encoder(
@@ -243,6 +260,7 @@ class Mirasol(Module):
 
         self.wrapped_decoder = AutoregressiveWrapper(
             self.decoder,
+            mask_prob = text_forgetful_causal_mask_prob,
             **autoregressive_wrapper_kwargs
         )
 
@@ -393,11 +411,20 @@ class Mirasol(Module):
 
         rotary_emb = self.audio_video_rotary_pos_emb(seq_positions)
 
+        # determine which tokens are masked
+        # and use `self_attn_kv_mask` kwarg on x-transformers
+
+        self_attn_kv_mask = None
+
+        if self.audio_video_mask_prob > 0.:
+            self_attn_kv_mask = self.get_audio_video_self_attn_mask(av_encoder_input.shape[:2])
+
         # encode the audio / video tokens autoregressively
 
         av_embeddings = self.encoder(
             av_encoder_input,
             attn_mask = ~causal_mask,
+            self_attn_kv_mask = self_attn_kv_mask,
             rotary_pos_emb = rotary_emb
         )
 
