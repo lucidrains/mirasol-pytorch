@@ -185,8 +185,10 @@ class Mirasol(Module):
 
         self.text_max_seq_len = text_max_seq_len
 
+        self.start_token_id = num_text_tokens
+
         self.decoder = TransformerWrapper(
-            num_tokens = num_text_tokens,
+            num_tokens = num_text_tokens + 1,
             max_seq_len = text_max_seq_len,
             attn_layers = Decoder(
                 dim = dim,
@@ -212,8 +214,8 @@ class Mirasol(Module):
     def generate(
         self,
         *,
-        prompt: Tensor,
         seq_len: int,
+        prompt: Optional[Tensor] = None,
         **kwargs
     ):
         was_training = self.training
@@ -240,7 +242,7 @@ class Mirasol(Module):
         video: Optional[Tensor] = None,
         encoded_audio: Optional[Tensor] = None,
         encoded_video: Optional[Tensor] = None,
-        text: Tensor,
+        text: Optional[Tensor] = None,
         return_loss = True,
         return_loss_breakdown = False,
         generate = False,
@@ -289,6 +291,8 @@ class Mirasol(Module):
             encoded_audio = unpack_one(encoded_audio, audio_time_ps, '* n d')
 
         # ensure audio and video is time aligned
+
+        batch = encoded_audio.shape[0]
 
         audio_time_frames = encoded_audio.shape[1]
         video_time_frames = encoded_video.shape[1]
@@ -341,12 +345,23 @@ class Mirasol(Module):
             rotary_pos_emb = rotary_emb
         )
 
+        # handle start token for text
+
+        if exists(text):
+            text = F.pad(text, (1, 0), value = self.start_token_id)
+        else:
+            text = torch.full((batch, 1), self.start_token_id, device = self.device, dtype = torch.long)
+
+        # if generate flag is passed in, generate using `text` as prompt
+
         if generate:
             generate_seq_len = default(generate_seq_len, self.text_max_seq_len)
             return self.wrapped_decoder.generate(text, seq_len = generate_seq_len, context = av_embeddings)
 
         if not return_loss:
             return self.decoder(text, context = av_embeddings)
+
+        assert text.shape[-1] > 1
 
         # av autoregressive cosine sim loss
 
