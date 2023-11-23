@@ -207,6 +207,7 @@ class Mirasol(Module):
             depth = encoder_depth,
             dim_head = attn_dim_head,
             heads = attn_heads,
+            num_mem_kv = 1,
             **attn_layers_kwargs
         )
 
@@ -233,6 +234,7 @@ class Mirasol(Module):
                 depth = decoder_depth,
                 dim_head = attn_dim_head,
                 heads = attn_heads,
+                num_mem_kv = 1,
                 cross_attend = True,
                 rotary_pos_emb = True,
                 **attn_layers_kwargs
