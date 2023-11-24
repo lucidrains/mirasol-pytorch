@@ -1,3 +1,4 @@
+import operator
 from functools import partial
 
 import torch
@@ -106,14 +107,16 @@ class Mirasol(Module):
         video_frames_per_timechunk,
         audio_freq_dim,
         audio_time_dim_per_timechunk,
-        audio_patch_size: Tuple[int, int],              # (freq, time)
-        video_patch_size: Tuple[int, int],              # (spatial, time)
+        audio_patch_size: Tuple[int, int],                          # (freq, time)
+        video_patch_size: Tuple[int, int],                          # (spatial, time)
+        video_recon_patch_size: Optional[Tuple[int, int]] = None,   # (spatial, time) - they use a smaller video for reconstruction loss
+        video_recon_interpolate_mode = 'nearest',
         audio_encoder: Union[Module, Dict[str, Any]],
         video_encoder: Union[Module, Dict[str, Any]],
-        num_audio_video_register_tokens = 8,            # https://arxiv.org/abs/2309.16588
-        audio_video_mask_prob = 0.15,                   # in the paper, they used masked tokens presumably, but from the Berkeley forgetful-causal-mask paper, a simple key-value mask should suffice
+        num_audio_video_register_tokens = 8,                        # https://arxiv.org/abs/2309.16588
+        audio_video_mask_prob = 0.15,                         # in the paper, they used masked tokens presumably, but from the Berkeley forgetful-causal-mask paper, a simple key-value mask should suffice
         text_max_seq_len = 2048,
-        text_forgetful_causal_mask_prob = 0.1,          # https://arxiv.org/abs/2210.13432
+        text_forgetful_causal_mask_prob = 0.1,                      # https://arxiv.org/abs/2210.13432
         encoder_depth = 6,
         decoder_depth = 6,
         combiner_depth = 2,
@@ -256,7 +259,21 @@ class Mirasol(Module):
 
         # for autoregressive reconstruction loss
 
-        self.to_reconstructed_video = nn.Linear(flattened_embedding_dim, (video_image_size ** 2) * video_frames_per_timechunk * video_channels)
+        self.should_resize_video_for_recon = exists(video_recon_patch_size)
+
+        if self.should_resize_video_for_recon:
+            assert all([*map(operator.le, video_recon_patch_size, video_patch_size)])
+
+            video_recon_spatial_size, video_recon_time_size = video_recon_patch_size
+
+            self.video_recon_shape = (video_recon_spatial_size, video_recon_spatial_size, video_recon_time_size)
+            self.video_recon_interpolate_mode = video_recon_interpolate_mode
+
+            cumpro_video_chunk_dims = (video_recon_spatial_size ** 2) * video_recon_time_size
+        else:
+            cumpro_video_chunk_dims = (video_image_size ** 2) * video_frames_per_timechunk
+
+        self.to_reconstructed_video = nn.Linear(flattened_embedding_dim, cumpro_video_chunk_dims * video_channels)
 
         self.to_reconstructed_audio = nn.Linear(flattened_embedding_dim, audio_freq_dim * audio_time_dim_per_timechunk)
 
@@ -496,6 +513,10 @@ class Mirasol(Module):
 
         if exists(encoded_video):
             reconstructed_video = self.to_reconstructed_video(flattened_embeddings)
+
+            if self.should_resize_video_for_recon:
+                timechunked_video = F.interpolate(video, self.video_recon_shape, mode = self.video_recon_interpolate_mode)
+                timechunked_video = rearrange(timechunked_video, 'b d ... -> b ... d')
 
             timechunked_video = unpack_one(timechunked_video, video_frame_ps, '* f h w d')
             timechunked_video = rearrange(timechunked_video, 'b c f h w d -> b c (f h w d)', b = batch)
