@@ -121,6 +121,7 @@ class Mirasol(Module):
         video_channels = 3,
         attn_dim_head = 64,
         attn_heads = 8,
+        flash_attn = True,
         attn_layers_kwargs: dict = dict(),
         combiner: Optional[Module] = None,
         combiner_kwargs: dict = dict(),
@@ -129,7 +130,7 @@ class Mirasol(Module):
             ignore_index = -100
         ),
         av_autoregressive_loss_weight = 1.,
-        flash_attn = True
+        av_reconstruction_loss_weight = 1.
     ):
         super().__init__()
 
@@ -156,14 +157,16 @@ class Mirasol(Module):
         video_patch_dim = video_channels * (video_spatial_patch_size ** 2) * video_time_patch_size
         audio_patch_dim = audio_freq_patch_size * audio_time_patch_size
 
+        self.to_timechunked_video = Rearrange('b c (f pf) (h ph) (w pw) -> b f h w (c pf ph pw)', pf = video_time_patch_size, ph = video_spatial_patch_size, pw = video_spatial_patch_size)
+
         self.to_video_tokens = nn.Sequential(
-            Rearrange('b c (f pf) (h ph) (w pw) -> b f h w (c pf ph pw)', pf = video_time_patch_size, ph = video_spatial_patch_size, pw = video_spatial_patch_size),
             nn.Linear(video_patch_dim, dim),
             nn.LayerNorm(dim)
         )
 
+        self.to_timechunked_audio = Rearrange('b (f pf) (t pt) -> b f t (pf pt)', pf = audio_freq_patch_size, pt = audio_time_patch_size)
+
         self.to_audio_tokens = nn.Sequential(
-            Rearrange('b (f pf) (t pt) -> b f t (pf pt)', pf = audio_freq_patch_size, pt = audio_time_patch_size),
             nn.Linear(audio_patch_dim, dim),
             nn.LayerNorm(dim)
         )
@@ -244,12 +247,20 @@ class Mirasol(Module):
 
         # for audio/video autoregressive loss
 
-        self.to_encoder_next_token_pred = nn.Sequential(
-            Rearrange('b (n c) d -> b n (c d)', c = combiner_output_num_tokens),
-            nn.Linear(combiner_output_num_tokens * dim, dim)
-        )
+        self.to_flattened_combined_tokens = Rearrange('b (n c) d -> b n (c d)', c = combiner_output_num_tokens)
+
+        flattened_embedding_dim = combiner_output_num_tokens * dim
+        self.to_encoder_next_token_pred = nn.Linear(flattened_embedding_dim, dim)
 
         self.av_autoregressive_loss_weight = av_autoregressive_loss_weight
+
+        # for autoregressive reconstruction loss
+
+        self.to_reconstructed_video = nn.Linear(flattened_embedding_dim, (video_image_size ** 2) * video_frames_per_timechunk * video_channels)
+
+        self.to_reconstructed_audio = nn.Linear(flattened_embedding_dim, audio_freq_dim * audio_time_dim_per_timechunk)
+
+        self.av_reconstruction_loss_weight = av_reconstruction_loss_weight
 
         # text decoder
 
@@ -336,7 +347,9 @@ class Mirasol(Module):
             video = rearrange(video, 'b c (f fc) h w -> b f c fc h w', fc = self.video_frames_per_timechunk)
             video, video_frame_ps = pack_one(video, '* c fc h w')
 
-            video_tokens = self.to_video_tokens(video)
+            timechunked_video = self.to_timechunked_video(video)
+
+            video_tokens = self.to_video_tokens(timechunked_video)
             video_pos_emb = posemb_sincos_nd(video_tokens)
 
             video_tokens = rearrange(video_tokens, 'b ... d -> b (...) d')
@@ -363,7 +376,9 @@ class Mirasol(Module):
             audio = rearrange(audio, 'b f (t tc) -> b tc f t', tc = self.audio_time_dim_per_timechunk)
             audio, audio_time_ps = pack_one(audio, '* f t')
 
-            audio_tokens = self.to_audio_tokens(audio)
+            timechunked_audio = self.to_timechunked_audio(audio)
+
+            audio_tokens = self.to_audio_tokens(timechunked_audio)
             audio_pos_emb = posemb_sincos_nd(audio_tokens)
 
             audio_tokens = rearrange(audio_tokens, 'b ... d -> b (...) d')
@@ -463,13 +478,39 @@ class Mirasol(Module):
 
         assert text.shape[-1] > 1
 
+        # flattened combined tokens
+
+        flattened_embeddings = self.to_flattened_combined_tokens(av_embeddings)
+
         # av autoregressive cosine sim loss
 
-        next_token_predictions = self.to_encoder_next_token_pred(av_embeddings)
+        next_token_predictions = self.to_encoder_next_token_pred(flattened_embeddings)
 
         past, future = next_token_predictions[:, :-1], next_token_predictions[:, 1:]
 
         av_autoregressive_loss = cosine_sim_loss(past, future)
+
+        # av autoregressive reconstruction loss (which is also cosine sim, interestingly)
+
+        recon_loss = 0.
+
+        if exists(encoded_video):
+            reconstructed_video = self.to_reconstructed_video(flattened_embeddings)
+
+            timechunked_video = unpack_one(timechunked_video, video_frame_ps, '* f h w d')
+            timechunked_video = rearrange(timechunked_video, 'b c f h w d -> b c (f h w d)', b = batch)
+
+            recon_video_loss = cosine_sim_loss(reconstructed_video[:, :-1], timechunked_video[:, 1:num_time_steps])
+
+            recon_loss = recon_loss + recon_video_loss
+
+        if exists(encoded_audio):
+            reconstructed_audio = self.to_reconstructed_audio(flattened_embeddings)
+            timechunked_audio = unpack_one(timechunked_audio, audio_time_ps, '* f t d')
+            timechunked_audio = rearrange(timechunked_audio, 'b c f t d -> b c (f t d)')
+
+            recon_audio_loss = cosine_sim_loss(reconstructed_audio[:, :-1], timechunked_audio[:, 1:num_time_steps])
+            recon_loss = recon_loss + recon_audio_loss
 
         # text autoregressive loss
 
@@ -478,11 +519,12 @@ class Mirasol(Module):
         # total loss
 
         total_loss = text_autoregressive_loss + \
-                     av_autoregressive_loss * self.av_autoregressive_loss_weight
+                     av_autoregressive_loss * self.av_autoregressive_loss_weight + \
+                     recon_loss * self.av_reconstruction_loss_weight
 
         if not return_loss_breakdown:
             return total_loss
 
-        loss_breakdown = (text_autoregressive_loss, av_autoregressive_loss)
+        loss_breakdown = (text_autoregressive_loss, av_autoregressive_loss, recon_loss)
 
         return total_loss, loss_breakdown

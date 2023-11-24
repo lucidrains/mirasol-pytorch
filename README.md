@@ -69,7 +69,7 @@ sampled_text = model.generate(
 - [x] auto-handle start token for decoder
 - [x] positional embeddings for video and audio encoder
 - [x] enable register tokens for both video and audio encoder, inline with new research
-- [ ] add audio and video reconstruction losses
+- [x] add audio and video reconstruction losses
 - [ ] add similarity regularization from TTS research
 
 ## Citations
