@@ -128,7 +128,8 @@ class Mirasol(Module):
             pad_value = 0,
             ignore_index = -100
         ),
-        av_autoregressive_loss_weight = 1.
+        av_autoregressive_loss_weight = 1.,
+        flash_attn = True
     ):
         super().__init__()
 
@@ -167,11 +168,22 @@ class Mirasol(Module):
             nn.LayerNorm(dim)
         )
 
+        default_vit_kwargs = dict(
+            dim = dim,
+            flash_attn = flash_attn
+        )
+
         if isinstance(video_encoder, dict):
-            video_encoder = Encoder(**{'dim': dim, **video_encoder})
+            video_encoder = Encoder(**{
+                **default_vit_kwargs,
+                **video_encoder
+            })
 
         if isinstance(audio_encoder, dict):
-            audio_encoder = Encoder(**{'dim': dim, **audio_encoder})
+            audio_encoder = Encoder(**{
+                **default_vit_kwargs,
+                **audio_encoder
+            })
 
         self.video_encoder = video_encoder
         self.audio_encoder = audio_encoder
@@ -195,6 +207,7 @@ class Mirasol(Module):
                 depth = combiner_depth,
                 dim_head = attn_dim_head,
                 heads = attn_heads,
+                flash_attn = flash_attn
             )
 
             combiner = Encoder(
@@ -225,6 +238,7 @@ class Mirasol(Module):
             dim_head = attn_dim_head,
             heads = attn_heads,
             num_mem_kv = 1,
+            flash_attn = flash_attn,
             **attn_layers_kwargs
         )
 
@@ -254,6 +268,7 @@ class Mirasol(Module):
                 num_mem_kv = 1,
                 cross_attend = True,
                 rotary_pos_emb = True,
+                flash_attn = flash_attn,
                 **attn_layers_kwargs
             )
         )
