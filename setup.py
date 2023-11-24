@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 setup(
   name = 'mirasol-pytorch',
   packages = find_packages(exclude=[]),
-  version = '0.0.7',
+  version = '0.0.8',
   license='MIT',
   description = 'Mirasol - Pytorch',
   author = 'Phil Wang',

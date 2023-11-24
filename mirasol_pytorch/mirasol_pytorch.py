@@ -89,7 +89,7 @@ def mask_with_prob(
 ) -> Tensor:
     length = shape[-1]
     num_mask = int(prob * length)
-    randperm = torch.randn(shape).argsort(dim = -1)
+    randperm = torch.randn(shape, device = device).argsort(dim = -1)
     return randperm >= num_mask
 
 # main class
@@ -417,7 +417,9 @@ class Mirasol(Module):
         self_attn_kv_mask = None
 
         if self.audio_video_mask_prob > 0.:
-            self_attn_kv_mask = self.get_audio_video_self_attn_mask(av_encoder_input.shape[:2])
+            self_attn_kv_mask = self.get_audio_video_self_attn_mask((batch, num_time_steps), device = self.device)
+
+            self_attn_kv_mask = repeat(self_attn_kv_mask, 'b n -> b (n c)', c = self.combiner_output_num_tokens)
 
         # encode the audio / video tokens autoregressively
 
