@@ -269,11 +269,11 @@ class Mirasol(Module):
             self.video_recon_shape = (video_recon_spatial_size, video_recon_spatial_size, video_recon_time_size)
             self.video_recon_interpolate_mode = video_recon_interpolate_mode
 
-            cumpro_video_chunk_dims = (video_recon_spatial_size ** 2) * video_recon_time_size
+            cumprod_video_chunk_dims = (video_recon_spatial_size ** 2) * video_recon_time_size
         else:
-            cumpro_video_chunk_dims = (video_image_size ** 2) * video_frames_per_timechunk
+            cumprod_video_chunk_dims = (video_image_size ** 2) * video_frames_per_timechunk
 
-        self.to_reconstructed_video = nn.Linear(flattened_embedding_dim, cumpro_video_chunk_dims * video_channels)
+        self.to_reconstructed_video = nn.Linear(flattened_embedding_dim, cumprod_video_chunk_dims * video_channels)
 
         self.to_reconstructed_audio = nn.Linear(flattened_embedding_dim, audio_freq_dim * audio_time_dim_per_timechunk)
 
