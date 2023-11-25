@@ -70,7 +70,7 @@ sampled_text = model.generate(
 - [x] positional embeddings for video and audio encoder
 - [x] enable register tokens for both video and audio encoder, inline with new research
 - [x] add audio and video reconstruction losses
-- [ ] add similarity regularization from TTS research
+- [x] add similarity regularization from TTS research
 
 ## Citations
 
@@ -113,5 +113,16 @@ sampled_text = model.generate(
     year    = {2023},
     volume  = {abs/2306.12929},
     url     = {https://api.semanticscholar.org/CorpusID:259224568}
+}
+```
+
+```bibtex
+@misc{shi2023enhance,
+    title   = {Enhance audio generation controllability through representation similarity regularization}, 
+    author  = {Yangyang Shi and Gael Le Lan and Varun Nagaraja and Zhaoheng Ni and Xinhao Mei and Ernie Chang and Forrest Iandola and Yang Liu and Vikas Chandra},
+    year    = {2023},
+    eprint  = {2309.08773},
+    archivePrefix = {arXiv},
+    primaryClass = {cs.SD}
 }
 ```

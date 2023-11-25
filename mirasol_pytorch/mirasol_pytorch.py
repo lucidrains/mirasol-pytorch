@@ -1,5 +1,6 @@
 import operator
 from functools import partial
+from collections import namedtuple
 
 import torch
 import torch.nn.functional as F
@@ -9,7 +10,7 @@ from torch.nn import Module, ModuleList
 from beartype import beartype
 from beartype.typing import Optional, Union, Tuple, Dict, Any
 
-from einops import rearrange, repeat, pack, unpack
+from einops import rearrange, repeat, reduce, pack, unpack
 from einops.layers.torch import Rearrange
 
 from x_transformers import (
@@ -20,6 +21,8 @@ from x_transformers import (
 )
 
 from x_transformers.x_transformers import RotaryEmbedding
+
+from mirasol_pytorch.distributed import all_gather, get_is_distributed
 
 # helper functions
 
@@ -95,6 +98,13 @@ def mask_with_prob(
 
 # main class
 
+Losses = namedtuple('Losses', [
+    'text_autoregressive',
+    'av_autoregressive',
+    'av_recon',
+    'text_av_sim_reg'
+])
+
 class Mirasol(Module):
 
     @beartype
@@ -133,7 +143,8 @@ class Mirasol(Module):
             ignore_index = -100
         ),
         av_autoregressive_loss_weight = 1.,
-        av_reconstruction_loss_weight = 1.
+        av_reconstruction_loss_weight = 1.,
+        sim_reg_loss_weight = 0.
     ):
         super().__init__()
 
@@ -306,6 +317,12 @@ class Mirasol(Module):
             mask_prob = text_forgetful_causal_mask_prob,
             **autoregressive_wrapper_kwargs
         )
+
+        # similarity reg loss
+
+        has_sim_reg = sim_reg_loss_weight > 0.
+        self.has_sim_reg = has_sim_reg
+        self.sim_reg_loss_weight = sim_reg_loss_weight
 
     @property
     def device(self):
@@ -535,17 +552,43 @@ class Mirasol(Module):
 
         # text autoregressive loss
 
-        text_autoregressive_loss = self.wrapped_decoder(text, context = av_embeddings)
+        text_autoregressive_loss, decoder_outputs = self.wrapped_decoder(
+            text,
+            context = av_embeddings,
+            return_outputs = True
+        )
+
+        # similarity regularization loss
+
+        sim_reg_loss = 0.
+
+        if self.has_sim_reg:
+            _, decoder_intermediates = decoder_outputs
+
+            text_embed = decoder_intermediates.last_hidden
+            av_embed = flattened_embeddings
+
+            av_embed, text_embed = map(lambda t: reduce(t, 'b n d -> b d', 'max'), (av_embed, text_embed))
+            av_embed, text_embed = map(l2norm, (av_embed, text_embed))
+
+            if get_is_distributed():
+                av_embed = all_gather(av_embed, 0, None)
+                text_embed = all_gather(text_embed, 0, None)
+
+            av_sim, text_sim = map(lambda t: einsum('i d, j d -> i j', t, t), (av_embed, text_embed))
+
+            sim_reg_loss = F.mse_loss(av_sim, text_sim)
 
         # total loss
 
         total_loss = text_autoregressive_loss + \
                      av_autoregressive_loss * self.av_autoregressive_loss_weight + \
-                     recon_loss * self.av_reconstruction_loss_weight
+                     recon_loss * self.av_reconstruction_loss_weight + \
+                     sim_reg_loss * self.sim_reg_loss_weight
 
         if not return_loss_breakdown:
             return total_loss
 
-        loss_breakdown = (text_autoregressive_loss, av_autoregressive_loss, recon_loss)
+        loss_breakdown = Losses(text_autoregressive_loss, av_autoregressive_loss, recon_loss, sim_reg_loss)
 
         return total_loss, loss_breakdown
