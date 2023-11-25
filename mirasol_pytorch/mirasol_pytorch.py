@@ -361,6 +361,7 @@ class Mirasol(Module):
         encoded_audio: Optional[Tensor] = None,
         encoded_video: Optional[Tensor] = None,
         text: Optional[Tensor] = None,
+        text_mask: Optional[Tensor] = None,
         return_loss = True,
         return_loss_breakdown = False,
         generate = False,
@@ -566,6 +567,12 @@ class Mirasol(Module):
             _, decoder_intermediates = decoder_outputs
 
             text_embed = decoder_intermediates.last_hidden
+
+            if exists(text_mask):
+                text_embed_len = text_embed.shape[-2]
+                text_mask[:, :text_embed_len]
+                text_embed = text_embed.masked_fill(~text_mask[..., None], -torch.finfo(text_embed.dtype).max)
+
             av_embed = flattened_embeddings
 
             av_embed, text_embed = map(lambda t: reduce(t, 'b n d -> b d', 'max'), (av_embed, text_embed))
