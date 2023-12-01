@@ -264,7 +264,7 @@ class Mirasol(Module):
         self.to_flattened_combined_tokens = Rearrange('b (n c) d -> b n (c d)', c = combiner_output_num_tokens)
 
         flattened_embedding_dim = combiner_output_num_tokens * dim
-        self.to_encoder_next_token_pred = nn.Linear(flattened_embedding_dim, dim)
+        self.to_encoder_next_token_pred = nn.Linear(flattened_embedding_dim, flattened_embedding_dim)
 
         self.av_autoregressive_loss_weight = av_autoregressive_loss_weight
 
@@ -521,7 +521,7 @@ class Mirasol(Module):
 
         next_token_predictions = self.to_encoder_next_token_pred(flattened_embeddings)
 
-        past, future = next_token_predictions[:, :-1], next_token_predictions[:, 1:]
+        past, future = next_token_predictions[:, :-1], flattened_embeddings[:, 1:]
 
         av_autoregressive_loss = cosine_sim_loss(past, future)
 
