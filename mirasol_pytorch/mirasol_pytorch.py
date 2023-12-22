@@ -396,7 +396,7 @@ class Mirasol(Module):
 
             encoded_video = self.video_encoder(video_tokens)
 
-            _, encoded_video = unpack(video_tokens, register_ps, 'b * d')
+            _, encoded_video = unpack(encoded_video, register_ps, 'b * d')
 
             encoded_video = unpack_one(encoded_video, video_frame_ps, '* n d')
 
